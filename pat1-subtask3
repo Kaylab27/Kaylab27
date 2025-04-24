@@ -18,3 +18,8 @@ if(choice==1){
 }
 
 return 0;
+
+}
+
+//function to convert binary only (only for non-negative numbers)
+strinds decimaltobinary(int decimal)
