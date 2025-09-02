@@ -1,0 +1,430 @@
+import pygame
+import sys
+import math
+import random
+from pygame.locals import *
+
+# Initialize pygame
+pygame.init()
+
+# Screen dimensions
+WIDTH, HEIGHT = 1000, 700
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Line Following Robot (LFR) Simulation")
+
+# Colors
+BACKGROUND = (30, 30, 50)
+LINE_COLOR = (200, 200, 200)
+ROBOT_COLOR = (80, 180, 250)
+SENSOR_COLOR = (220, 80, 80)
+TEXT_COLOR = (220, 220, 220)
+BUTTON_COLOR = (70, 130, 180)
+BUTTON_HOVER = (90, 150, 200)
+CALIBRATION_BG = (40, 40, 60)
+GRAPH_COLOR = (100, 200, 100)
+
+# Fonts
+font = pygame.font.SysFont('Consolas', 16)
+title_font = pygame.font.SysFont('Arial', 28, bold=True)
+small_font = pygame.font.SysFont('Consolas', 12)
+
+# Robot parameters
+robot_x, robot_y = WIDTH // 2, HEIGHT // 2
+robot_angle = 0
+robot_speed = 2
+sensor_distance = 40
+sensor_spread = 25
+sensor_height = 12  # 10-15mm from ground as recommended
+
+# Line path (a complex track with curves and intersections)
+line_path = []
+for i in range(0, 360, 2):
+    angle = math.radians(i)
+    x = WIDTH // 2 + 250 * math.cos(angle)
+    y = HEIGHT // 2 + 150 * math.sin(angle)
+    line_path.append((x, y))
+
+# Add some straight sections
+for i in range(200):
+    line_path.append((100 + i, 100))
+    line_path.append((800 - i, 600))
+
+# Sensor calibration values
+sensor_thresholds = [500, 500, 500]  # Default values
+calibrated = False
+calibration_data = [[], [], []]
+max_sensor_value = 1000
+
+# Serial communication simulation
+serial_messages = ["System initialized. Ready to calibrate."]
+serial_input = ""
+input_active = False
+
+# Graph data for sensor values
+graph_data = [[], [], []]
+graph_colors = [(255, 100, 100), (100, 255, 100), (100, 100, 255)]
+
+# Button areas
+buttons = {
+    "calibrate": pygame.Rect(WIDTH - 200, 20, 180, 40),
+    "forward": pygame.Rect(WIDTH - 200, 80, 180, 40),
+    "left": pygame.Rect(WIDTH - 200, 140, 180, 40),
+    "right": pygame.Rect(WIDTH - 200, 200, 180, 40),
+    "stop": pygame.Rect(WIDTH - 200, 260, 180, 40),
+    "clear_serial": pygame.Rect(WIDTH - 200, 500, 180, 40),
+    "auto_mode": pygame.Rect(WIDTH - 200, 380, 180, 40),
+}
+
+# Auto mode state
+auto_mode = False
+
+# Function to draw the line path
+def draw_line_path():
+    for point in line_path:
+        pygame.draw.circle(screen, LINE_COLOR, point, 3)
+
+# Function to draw the robot
+def draw_robot():
+    # Draw robot body
+    pygame.draw.circle(screen, ROBOT_COLOR, (int(robot_x), int(robot_y)), 20)
+    
+    # Draw direction indicator
+    end_x = robot_x + 20 * math.cos(robot_angle)
+    end_y = robot_y + 20 * math.sin(robot_angle)
+    pygame.draw.line(screen, (255, 255, 255), (robot_x, robot_y), (end_x, end_y), 3)
+    
+    # Draw sensors
+    for i in range(3):
+        angle = robot_angle - math.radians(sensor_spread) + math.radians(i * sensor_spread)
+        sensor_x = robot_x + sensor_distance * math.cos(angle)
+        sensor_y = robot_y + sensor_distance * math.sin(angle)
+        
+        # Draw sensor line
+        pygame.draw.line(screen, SENSOR_COLOR, (robot_x, robot_y), (sensor_x, sensor_y), 2)
+        
+        # Draw sensor
+        pygame.draw.circle(screen, SENSOR_COLOR, (int(sensor_x), int(sensor_y)), 5)
+        
+        # Draw sensor height indicator
+        pygame.draw.line(screen, (200, 200, 200), 
+                         (sensor_x, sensor_y), 
+                         (sensor_x, sensor_y + sensor_height), 1)
+
+# Function to simulate sensor readings
+def read_sensors():
+    readings = [0, 0, 0]
+    
+    for i in range(3):
+        angle = robot_angle - math.radians(sensor_spread) + math.radians(i * sensor_spread)
+        sensor_x = robot_x + sensor_distance * math.cos(angle)
+        sensor_y = robot_y + sensor_distance * math.sin(angle)
+        
+        # Check distance to line
+        min_dist = float('inf')
+        for point in line_path:
+            dist = math.sqrt((sensor_x - point[0])**2 + (sensor_y - point[1])**2)
+            if dist < min_dist:
+                min_dist = dist
+        
+        # Inverse relationship - closer to line = higher reading
+        readings[i] = max(0, max_sensor_value - min_dist * 8)
+        
+        # Add some noise to simulate real sensors
+        readings[i] += random.uniform(-20, 20)
+    
+    return readings
+
+# Function to update robot position based on sensor readings
+def follow_line(readings):
+    global robot_angle
+    
+    # Simple line following algorithm
+    left_sensor = readings[0]
+    center_sensor = readings[1]
+    right_sensor = readings[2]
+    
+    # If all sensors don't see the line, continue straight
+    if (center_sensor < sensor_thresholds[1] and 
+        left_sensor < sensor_thresholds[0] and 
+        right_sensor < sensor_thresholds[2]):
+        return
+    
+    # Adjust angle based on sensor readings
+    if center_sensor > sensor_thresholds[1]:
+        # On the line, go straight
+        pass
+    elif left_sensor > sensor_thresholds[0]:
+        # Line is to the left, turn left
+        robot_angle -= 0.05
+    elif right_sensor > sensor_thresholds[2]:
+        # Line is to the right, turn right
+        robot_angle += 0.05
+
+# User-defined movement functions
+def move_forward():
+    global robot_x, robot_y
+    robot_x += robot_speed * math.cos(robot_angle)
+    robot_y += robot_speed * math.sin(robot_angle)
+    add_serial_message("Command: Move forward")
+
+def turn_left():
+    global robot_angle
+    robot_angle -= 0.1
+    add_serial_message("Command: Turn left")
+
+def turn_right():
+    global robot_angle
+    robot_angle += 0.1
+    add_serial_message("Command: Turn right")
+
+def stop():
+    add_serial_message("Command: Stop")
+
+# Function to calibrate sensors
+def calibrate_sensors():
+    global sensor_thresholds, calibrated, calibration_data
+    
+    # Simulate calibration process
+    add_serial_message("Starting calibration...")
+    add_serial_message("Move robot over different surfaces")
+    
+    # Clear previous calibration data
+    calibration_data = [[], [], []]
+    
+    # Take multiple readings and calculate averages
+    for _ in range(50):
+        readings = read_sensors()
+        for i in range(3):
+            calibration_data[i].append(readings[i])
+        pygame.time.delay(10)
+    
+    # Set thresholds based on min and max values
+    for i in range(3):
+        min_val = min(calibration_data[i])
+        max_val = max(calibration_data[i])
+        sensor_thresholds[i] = (min_val + max_val) / 2
+    
+    calibrated = True
+    add_serial_message("Calibration complete!")
+    add_serial_message(f"New thresholds: L={sensor_thresholds[0]:.1f}, C={sensor_thresholds[1]:.1f}, R={sensor_thresholds[2]:.1f}")
+
+# Function to add a message to the serial communication console
+def add_serial_message(message):
+    serial_messages.append(message)
+    if len(serial_messages) > 10:
+        serial_messages.pop(0)
+
+# Function to draw the UI
+def draw_ui():
+    # Draw title
+    title = title_font.render("Line Following Robot (LFR) Simulation", True, TEXT_COLOR)
+    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 10))
+    
+    # Draw sensor readings
+    readings = read_sensors()
+    sensor_text = [
+        f"Left Sensor: {readings[0]:.1f} (Threshold: {sensor_thresholds[0]:.1f})",
+        f"Center Sensor: {readings[1]:.1f} (Threshold: {sensor_thresholds[1]:.1f})",
+        f"Right Sensor: {readings[2]:.1f} (Threshold: {sensor_thresholds[2]:.1f})"
+    ]
+    
+    for i, text in enumerate(sensor_text):
+        color = (100, 255, 100) if readings[i] > sensor_thresholds[i] else TEXT_COLOR
+        text_surf = font.render(text, True, color)
+        screen.blit(text_surf, (20, 80 + i * 30))
+    
+    # Draw calibration status
+    status_text = "Calibrated: " + ("YES" if calibrated else "NO")
+    status_color = (100, 255, 100) if calibrated else (255, 100, 100)
+    status_surf = font.render(status_text, True, status_color)
+    screen.blit(status_surf, (20, 180))
+    
+    # Draw auto mode status
+    auto_text = "Auto Mode: " + ("ON" if auto_mode else "OFF")
+    auto_color = (100, 255, 100) if auto_mode else (255, 100, 100)
+    auto_surf = font.render(auto_text, True, auto_color)
+    screen.blit(auto_surf, (20, 210))
+    
+    # Draw buttons
+    for name, rect in buttons.items():
+        # Check if mouse is hovering over button
+        if rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(screen, BUTTON_HOVER, rect, border_radius=5)
+        else:
+            pygame.draw.rect(screen, BUTTON_COLOR, rect, border_radius=5)
+        
+        # Draw button text
+        text = name.capitalize().replace("_", " ")
+        text_surf = font.render(text, True, TEXT_COLOR)
+        screen.blit(text_surf, (rect.centerx - text_surf.get_width() // 2, rect.centery - text_surf.get_height() // 2))
+    
+    # Draw serial communication box
+    pygame.draw.rect(screen, CALIBRATION_BG, (20, 250, 600, 200), border_radius=5)
+    serial_title = font.render("Serial Communication Console:", True, TEXT_COLOR)
+    screen.blit(serial_title, (30, 260))
+    
+    # Draw serial messages
+    for i, message in enumerate(serial_messages):
+        msg_surf = font.render(message, True, TEXT_COLOR)
+        screen.blit(msg_surf, (30, 290 + i * 20))
+    
+    # Draw input box
+    input_rect = pygame.Rect(30, 460, 580, 30)
+    pygame.draw.rect(screen, (50, 50, 70), input_rect, border_radius=3)
+    pygame.draw.rect(screen, (100, 100, 120) if input_active else (70, 70, 90), input_rect, 2, border_radius=3)
+    
+    # Draw input text
+    input_surf = font.render(serial_input + ("|" if input_active and pygame.time.get_ticks() % 1000 < 500 else ""), True, TEXT_COLOR)
+    screen.blit(input_surf, (input_rect.x + 5, input_rect.y + 5))
+    
+    # Draw sensor graph
+    draw_sensor_graph(650, 250, 320, 200)
+    
+    # Draw instructions
+    instructions = [
+        "Instructions:",
+        "1. Click 'Calibrate' to set sensor thresholds",
+        "2. Use manual controls or enable 'Auto Mode'",
+        "3. Type commands in the serial input below",
+        "4. Sensor readings are shown on the left",
+        "5. Real-time graph shows sensor values"
+    ]
+    
+    for i, instruction in enumerate(instructions):
+        inst_surf = small_font.render(instruction, True, TEXT_COLOR)
+        screen.blit(inst_surf, (20, 500 + i * 20))
+
+# Function to draw sensor value graph
+def draw_sensor_graph(x, y, width, height):
+    # Draw graph background
+    pygame.draw.rect(screen, CALIBRATION_BG, (x, y, width, height), border_radius=5)
+    
+    # Draw title
+    title = font.render("Sensor Values Over Time", True, TEXT_COLOR)
+    screen.blit(title, (x + width//2 - title.get_width()//2, y + 10))
+    
+    # Draw graph axes
+    pygame.draw.line(screen, TEXT_COLOR, (x + 30, y + 30), (x + 30, y + height - 20), 1)
+    pygame.draw.line(screen, TEXT_COLOR, (x + 30, y + height - 20), (x + width - 10, y + height - 20), 1)
+    
+    # Update graph data
+    readings = read_sensors()
+    for i in range(3):
+        if len(graph_data[i]) > width - 50:
+            graph_data[i].pop(0)
+        graph_data[i].append(readings[i])
+    
+    # Draw graph lines
+    for i in range(3):
+        if len(graph_data[i]) > 1:
+            for j in range(1, len(graph_data[i])):
+                x1 = x + 30 + j - 1
+                y1 = y + height - 20 - (graph_data[i][j-1] / max_sensor_value) * (height - 50)
+                x2 = x + 30 + j
+                y2 = y + height - 20 - (graph_data[i][j] / max_sensor_value) * (height - 50)
+                
+                # Ensure coordinates are within graph bounds
+                y1 = max(y + 30, min(y + height - 20, y1))
+                y2 = max(y + 30, min(y + height - 20, y2))
+                
+                pygame.draw.line(screen, graph_colors[i], (x1, y1), (x2, y2), 2)
+    
+    # Draw threshold line
+    threshold_y = y + height - 20 - (sensor_thresholds[1] / max_sensor_value) * (height - 50)
+    threshold_y = max(y + 30, min(y + height - 20, threshold_y))
+    pygame.draw.line(screen, (200, 200, 200), (x + 30, threshold_y), (x + width - 10, threshold_y), 1)
+    
+    # Draw legend
+    for i in range(3):
+        pygame.draw.line(screen, graph_colors[i], (x + 40 + i*100, y + height - 5), (x + 80 + i*100, y + height - 5), 2)
+        label = font.render(["Left", "Center", "Right"][i], True, TEXT_COLOR)
+        screen.blit(label, (x + 85 + i*100, y + height - 10))
+
+# Function to process serial commands
+def process_serial_command(command):
+    command = command.strip().lower()
+    
+    if command == "forward":
+        move_forward()
+    elif command == "left":
+        turn_left()
+    elif command == "right":
+        turn_right()
+    elif command == "stop":
+        stop()
+    elif command == "calibrate":
+        calibrate_sensors()
+    elif command == "auto on":
+        global auto_mode
+        auto_mode = True
+        add_serial_message("Auto mode enabled")
+    elif command == "auto off":
+        auto_mode = False
+        add_serial_message("Auto mode disabled")
+    elif command == "status":
+        readings = read_sensors()
+        add_serial_message(f"L: {readings[0]:.1f}, C: {readings[1]:.1f}, R: {readings[2]:.1f}")
+    elif command == "help":
+        add_serial_message("Available commands: forward, left, right, stop")
+        add_serial_message("calibrate, auto on, auto off, status, help")
+    else:
+        add_serial_message(f"Unknown command: {command}")
+
+# Main game loop
+clock = pygame.time.Clock()
+
+while True:
+    for event in pygame.event.get():
+        if event.type == QUIT:
+            pygame.quit()
+            sys.exit()
+        
+        if event.type == MOUSEBUTTONDOWN:
+            # Check button clicks
+            if buttons["calibrate"].collidepoint(event.pos):
+                calibrate_sensors()
+            elif buttons["forward"].collidepoint(event.pos):
+                move_forward()
+            elif buttons["left"].collidepoint(event.pos):
+                turn_left()
+            elif buttons["right"].collidepoint(event.pos):
+                turn_right()
+            elif buttons["stop"].collidepoint(event.pos):
+                stop()
+            elif buttons["clear_serial"].collidepoint(event.pos):
+                serial_messages = ["Console cleared"]
+            elif buttons["auto_mode"].collidepoint(event.pos):
+                auto_mode = not auto_mode
+                add_serial_message(f"Auto mode {'enabled' if auto_mode else 'disabled'}")
+            
+            # Check if input box was clicked
+            input_rect = pygame.Rect(30, 460, 580, 30)
+            if input_rect.collidepoint(event.pos):
+                input_active = True
+            else:
+                input_active = False
+        
+        if event.type == KEYDOWN:
+            if input_active:
+                if event.key == K_RETURN:
+                    process_serial_command(serial_input)
+                    serial_input = ""
+                elif event.key == K_BACKSPACE:
+                    serial_input = serial_input[:-1]
+                else:
+                    serial_input += event.unicode
+    
+    # Update robot position if in auto mode
+    if auto_mode and calibrated:
+        readings = read_sensors()
+        follow_line(readings)
+        move_forward()
+    
+    # Draw everything
+    screen.fill(BACKGROUND)
+    draw_line_path()
+    draw_robot()
+    draw_ui()
+    
+    pygame.display.flip()
+    clock.tick(60)tty
