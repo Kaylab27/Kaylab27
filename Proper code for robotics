@@ -1,0 +1,236 @@
+/*
+  PPBR Robot - Arduino sketch (C++)
+  Behavior:
+   - Move forward from START.
+   - When IR line sensors detect the FIRST black line -> drop the frame (servo) to capture ball.
+   - Continue forward until the SECOND black line -> lift the frame immediately.
+   - Continue driving so ball momentum goes into the goal.
+
+  Hardware assumptions:
+   - 2 DC motors driven by an H-bridge (L298 / TB6612 / similar).
+   - 2 digital IR/line sensors (LEFT_SENSOR_PIN, RIGHT_SENSOR_PIN).
+     Sensors output LOW when detecting a black line (common), but change constants below if reversed.
+   - 1 servo for the capture frame.
+*/
+
+#include <Servo.h>
+
+/* --------- PIN ASSIGNMENTS (change to match your wiring) --------- */
+// Motor A (left)
+const int L_IN1 = 2;     // direction pin 1
+const int L_IN2 = 3;     // direction pin 2
+const int L_EN  = 5;     // PWM speed control
+
+// Motor B (right)
+const int R_IN1 = 4;
+const int R_IN2 = 7;
+const int R_EN  = 6;     // PWM speed control
+
+// Line/IR sensors
+const int LEFT_SENSOR_PIN  = 8;   // digital input
+const int RIGHT_SENSOR_PIN = 9;   // digital input
+
+// Servo for frame
+const int FRAME_SERVO_PIN = 10;
+
+/* --------- PARAMETERS / TUNING --------- */
+const int MOTOR_SPEED = 200;           // 0-255 PWM forward cruising speed
+const unsigned long FRAME_DROP_TIME_MS = 700; // time to wait for frame to fully drop (ms)
+const unsigned long FRAME_LIFT_TIME_MS = 400; // time to wait for lift (ms)
+const unsigned long STOP_ON_LINE_MS = 150;    // small pause when line detected to be stable
+
+// Sensor logic: set to LOW_WHEN_LINE_DETECTED = true if sensors read LOW when over black
+const bool LOW_WHEN_LINE_DETECTED = true;
+
+/* --------- Servo angles (adjust to your servo mounting) --------- */
+const int FRAME_UP_ANGLE   = 30;   // servo angle when frame is lifted (clear)
+const int FRAME_DOWN_ANGLE = 120;  // servo angle when frame is dropped (capture position)
+
+/* --------- GLOBALS --------- */
+Servo frameServo;
+
+// State machine
+enum State {
+  START_DRIVE,
+  FIRST_LINE_DETECTED,
+  DROPPING_FRAME,
+  DRIVING_AFTER_DROP,
+  SECOND_LINE_DETECTED,
+  LIFTING_FRAME,
+  FINISHED
+};
+
+State state = START_DRIVE;
+
+unsigned long stateEnteredAt = 0;
+
+/* --------- HELPER MOTOR FUNCTIONS --------- */
+void motorLeftForward(int speed) {
+  analogWrite(L_EN, speed);
+  digitalWrite(L_IN1, HIGH);
+  digitalWrite(L_IN2, LOW);
+}
+
+void motorRightForward(int speed) {
+  analogWrite(R_EN, speed);
+  digitalWrite(R_IN1, HIGH);
+  digitalWrite(R_IN2, LOW);
+}
+
+void motorLeftStop() {
+  analogWrite(L_EN, 0);
+  digitalWrite(L_IN1, LOW);
+  digitalWrite(L_IN2, LOW);
+}
+
+void motorRightStop() {
+  analogWrite(R_EN, 0);
+  digitalWrite(R_IN1, LOW);
+  digitalWrite(R_IN2, LOW);
+}
+
+void driveForward(int speed) {
+  motorLeftForward(speed);
+  motorRightForward(speed);
+}
+
+void stopMotors() {
+  motorLeftStop();
+  motorRightStop();
+}
+
+/* --------- SENSOR READ --------- */
+bool sensorDetectsLine(int pin) {
+  int val = digitalRead(pin);
+  return LOW_WHEN_LINE_DETECTED ? (val == LOW) : (val == HIGH);
+}
+
+/* --------- FRAME SERVO --------- */
+void dropFrame() {
+  frameServo.write(FRAME_DOWN_ANGLE);
+}
+
+void liftFrame() {
+  frameServo.write(FRAME_UP_ANGLE);
+}
+
+/* --------- SETUP --------- */
+void setup() {
+  // Motor pins
+  pinMode(L_IN1, OUTPUT);
+  pinMode(L_IN2, OUTPUT);
+  pinMode(L_EN,  OUTPUT);
+  pinMode(R_IN1, OUTPUT);
+  pinMode(R_IN2, OUTPUT);
+  pinMode(R_EN,  OUTPUT);
+
+  // Sensors
+  pinMode(LEFT_SENSOR_PIN, INPUT_PULLUP);  // use pullups; if sensors actively drive, adjust accordingly
+  pinMode(RIGHT_SENSOR_PIN, INPUT_PULLUP);
+
+  // Servo
+  frameServo.attach(FRAME_SERVO_PIN);
+  liftFrame(); // start with frame up
+
+  // Start state/time
+  state = START_DRIVE;
+  stateEnteredAt = millis();
+
+  // Small startup wait
+  delay(200);
+}
+
+/* --------- MAIN LOOP (state machine) --------- */
+void loop() {
+  unsigned long now = millis();
+
+  switch (state) {
+
+    case START_DRIVE:
+      // Drive straight forward from START
+      driveForward(MOTOR_SPEED);
+      // Check sensors for the first line. Require either sensor sees the line.
+      if (sensorDetectsLine(LEFT_SENSOR_PIN) || sensorDetectsLine(RIGHT_SENSOR_PIN)) {
+        // Debounce: wait a short moment then confirm
+        stopMotors();
+        delay(STOP_ON_LINE_MS);
+        if (sensorDetectsLine(LEFT_SENSOR_PIN) || sensorDetectsLine(RIGHT_SENSOR_PIN)) {
+          state = FIRST_LINE_DETECTED;
+          stateEnteredAt = now;
+        } else {
+          // false trigger, resume
+          driveForward(MOTOR_SPEED);
+        }
+      }
+      break;
+
+    case FIRST_LINE_DETECTED:
+      // When first line is detected, drop the frame to "capture" the ball.
+      stopMotors();
+      dropFrame();
+      state = DROPPING_FRAME;
+      stateEnteredAt = now;
+      break;
+
+    case DROPPING_FRAME:
+      // Wait enough time for servo to reach position and for ball to settle against frame
+      if (now - stateEnteredAt >= FRAME_DROP_TIME_MS) {
+        // Continue driving forward to push the ball
+        driveForward(MOTOR_SPEED);
+        state = DRIVING_AFTER_DROP;
+        stateEnteredAt = now;
+      }
+      break;
+
+    case DRIVING_AFTER_DROP:
+      // Keep driving until second line is detected.
+      if (sensorDetectsLine(LEFT_SENSOR_PIN) || sensorDetectsLine(RIGHT_SENSOR_PIN)) {
+        // Stop and confirm
+        stopMotors();
+        delay(STOP_ON_LINE_MS);
+        if (sensorDetectsLine(LEFT_SENSOR_PIN) || sensorDetectsLine(RIGHT_SENSOR_PIN)) {
+          state = SECOND_LINE_DETECTED;
+          stateEnteredAt = now;
+        } else {
+          // false trigger - resume
+          driveForward(MOTOR_SPEED);
+        }
+      }
+      break;
+
+    case SECOND_LINE_DETECTED:
+      // Immediately lift the frame and keep driving forward so the ball momentum pushes into goal.
+      liftFrame();
+      state = LIFTING_FRAME;
+      stateEnteredAt = now;
+      // keep motors running to let momentum push the ball
+      driveForward(MOTOR_SPEED);
+      break;
+
+    case LIFTING_FRAME:
+      // Wait a little while so servo lifts fully, and allow robot to drive forward a short distance
+      if (now - stateEnteredAt >= FRAME_LIFT_TIME_MS) {
+        // Optionally continue driving a little longer to ensure ball goes into goal.
+        // For demonstration: drive additional 600 ms then stop.
+        unsigned long extraDriveMs = 600;
+        unsigned long startExtra = now;
+        while (millis() - startExtra < extraDriveMs) {
+          driveForward(MOTOR_SPEED);
+        }
+        stopMotors();
+        state = FINISHED;
+        stateEnteredAt = millis();
+      }
+      break;
+
+    case FINISHED:
+      // Completed sequence. Optionally indicate completion via LED or beep.
+      stopMotors();
+      // do nothing else
+      break;
+  }
+
+  // minimal loop delay
+  delay(5);
+}
+
