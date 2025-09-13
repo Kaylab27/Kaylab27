@@ -1,0 +1,41 @@
+#include <iostream>
+
+// Assuming a class for motor control and sensor reading for simplicity
+class PPBR {
+public:
+    void moveForward();
+    void captureBall();
+    void liftFrame();
+    bool detectLine(); // Returns true if a line is detected
+
+    void operate() {
+        // Move forward until first line detected
+        while (!detectLine()) {
+            moveForward();
+        }
+        captureBall();
+
+        // Move forward until next line detected
+        while (!detectLine()) {
+            moveForward();
+        }
+        liftFrame();
+    }
+
+private:
+    // Implementations of motor control and sensor reading
+    void moveForward() { std::cout << "Moving forward...\n"; }
+    void captureBall() { std::cout << "Capturing ball...\n"; }
+    void liftFrame() { std::cout << "Lifting frame to drive ball into goal...\n"; }
+    bool detectLine() {
+        // Simulate line detection for demo; in real code, read IR sensor values
+        static int step = 0;
+        return ++step == 10 || step == 20; // Simulate detecting lines at steps 10 and 20
+    }
+};
+
+int main() {
+    PPBR robot;
+    robot.operate();
+    return 0;
+}
