@@ -1,7 +1,3 @@
-Line Following Robot (LFR) Control System
-
-Based on your requirements, I'll create a complete PyGame application that simulates a Line Following Robot with sensor calibration, serial communication simulation, and all necessary movement functions.
-
 ```python
 import pygame
 import sys
