@@ -1,18 +1,3 @@
-/*
-  PPBR Robot - Arduino sketch (C++)
-  Behavior:
-   - Move forward from START.
-   - When IR line sensors detect the FIRST black line -> drop the frame (servo) to capture ball.
-   - Continue forward until the SECOND black line -> lift the frame immediately.
-   - Continue driving so ball momentum goes into the goal.
-
-  Hardware assumptions:
-   - 2 DC motors driven by an H-bridge (L298 / TB6612 / similar).
-   - 2 digital IR/line sensors (LEFT_SENSOR_PIN, RIGHT_SENSOR_PIN).
-     Sensors output LOW when detecting a black line (common), but change constants below if reversed.
-   - 1 servo for the capture frame.
-*/
-
 #include <Servo.h>
 
 /* --------- PIN ASSIGNMENTS (change to match your wiring) --------- */
